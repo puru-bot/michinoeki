@@ -127,6 +127,7 @@ const REGION_OF = {
   "福岡県": "九州・沖縄", "佐賀県": "九州・沖縄", "長崎県": "九州・沖縄", "熊本県": "九州・沖縄", "大分県": "九州・沖縄", "宮崎県": "九州・沖縄", "鹿児島県": "九州・沖縄", "沖縄県": "九州・沖縄"
 };
 const REGION_ORDER = ["北海道", "東北", "関東", "中部", "近畿", "中国", "四国", "九州・沖縄"];
+const ALL_PREFS = Object.keys(REGION_OF);
 
 const COLORS = {
   bg: "#12161D",
@@ -324,7 +325,27 @@ Object.keys(visits).forEach((k) => {
 });
 
 let customs = loadJSON("customs", []);
+function migrateCustomsIntoVisits() {
+  customs.forEach(function (c) {
+    if (!visits[c.id]) visits[c.id] = {};
+    const e = visits[c.id];
+    if (e.v === undefined) e.v = true; // user deliberately added it; assume already visited
+    if (!e.collect) e.collect = {};
+    COLLECTIBLES.forEach(function (col) {
+      if (!e.collect[col.key]) e.collect[col.key] = "none";
+    });
+    if (!Array.isArray(e.dates)) e.dates = [];
+    if (c.date && e.dates.indexOf(c.date) === -1) e.dates.push(c.date);
+    e.dates = Array.from(new Set(e.dates)).sort();
+    if (e.dates.length > 3) e.dates = e.dates.slice(e.dates.length - 3);
+    if (c.note && !e.note) e.note = c.note;
+    delete c.note;
+    delete c.date;
+  });
+}
+migrateCustomsIntoVisits();
 let customCollectibles = loadJSON("customCollectibles", []);
+let hiddenCollectibleKeys = loadJSON("hiddenCollectibles", []);
 
 const state = {
   query: "",
@@ -337,6 +358,7 @@ const state = {
   backupMessage: "",
   collectibleFormOpen: false,
   newCollectibleMark: { type: "icon", value: "star" },
+  newCustomOfficial: false,
 };
 
 function persistVisits() {
@@ -348,11 +370,24 @@ function persistCustoms() {
 function persistCustomCollectibles() {
   saveJSON("customCollectibles", customCollectibles);
 }
+function persistHiddenCollectibles() {
+  saveJSON("hiddenCollectibles", hiddenCollectibleKeys);
+}
 function getAllCollectibles() {
   const customs2 = customCollectibles
     .filter(function (c) { return c.category === APP_CATEGORY; })
     .map(function (c) { return { key: c.key, label: c.label, icon: collectibleIconFn(c) }; });
   return COLLECTIBLES.concat(customs2);
+}
+function getVisibleCollectibles() {
+  return getAllCollectibles().filter(function (c) { return hiddenCollectibleKeys.indexOf(c.key) === -1; });
+}
+
+function getOfficialCustoms() {
+  return customs.filter(function (c) { return c.official && c.pref; });
+}
+function getOfficialTotalCount() {
+  return STATIONS.length + getOfficialCustoms().length;
 }
 
 function computeGrouped() {
@@ -389,9 +424,16 @@ function computeCounts() {
       pref.stations.forEach((st) => {
         if (visits[String(st.idx)] && visits[String(st.idx)].v) pv++;
       });
-      perPref[pref.name] = { visited: pv, total: pref.stations.length };
-      rv += pv;
-      rt += pref.stations.length;
+      const extras = getOfficialCustoms().filter(function (c) { return c.pref === pref.name; });
+      let extraVisited = 0;
+      extras.forEach(function (c) {
+        if (visits[c.id] && visits[c.id].v) extraVisited++;
+      });
+      const total = pref.stations.length + extras.length;
+      const visitedCount = pv + extraVisited;
+      perPref[pref.name] = { visited: visitedCount, total: total };
+      rv += visitedCount;
+      rt += total;
     });
     perRegion[region.name] = { visited: rv, total: rt };
   });
@@ -399,17 +441,31 @@ function computeCounts() {
 }
 
 function computeTotalVisited() {
-  return Object.values(visits).filter((v) => v && v.v).length;
+  let n = 0;
+  STATIONS.forEach((s, idx) => {
+    if (visits[String(idx)] && visits[String(idx)].v) n++;
+  });
+  getOfficialCustoms().forEach(function (c) {
+    if (visits[c.id] && visits[c.id].v) n++;
+  });
+  return n;
 }
 
 function computeCollectTotals() {
-  const list = getAllCollectibles();
+  const list = getVisibleCollectibles();
   const totals = {};
   list.forEach(function (c) {
     totals[c.key] = { got: 0, na: 0, unk: 0, none: 0 };
   });
   STATIONS.forEach((s, idx) => {
     const v = visits[String(idx)];
+    list.forEach(function (c) {
+      const status = (v && v.collect && v.collect[c.key]) || "none";
+      totals[c.key][status]++;
+    });
+  });
+  customs.forEach(function (cst) {
+    const v = visits[cst.id];
     list.forEach(function (c) {
       const status = (v && v.collect && v.collect[c.key]) || "none";
       totals[c.key][status]++;
@@ -423,6 +479,9 @@ function computeOnsenMatchCount() {
   STATIONS.forEach((s, idx) => {
     if (effectiveOnsen(s[0], s[1], visits[String(idx)]) === "yes") c++;
   });
+  customs.forEach(function (cst) {
+    if (effectiveOnsen(cst.official ? cst.pref : "登録外", cst.name, visits[cst.id]) === "yes") c++;
+  });
   return c;
 }
 
@@ -434,7 +493,12 @@ function computeSearchResults() {
     const pref = s[0], name = s[1], location = s[2], round = s[3];
     if (q && !(name.includes(q) || location.includes(q) || pref.includes(q))) return;
     if (state.onsenOnly && effectiveOnsen(pref, name, visits[String(idx)]) !== "yes") return;
-    out.push({ idx, pref, name, location, round });
+    out.push({ idx, pref, name, location, round, isCustom: false });
+  });
+  customs.forEach(function (cst) {
+    if (q && !((cst.name && cst.name.includes(q)) || (cst.location && cst.location.includes(q)))) return;
+    if (state.onsenOnly && effectiveOnsen(cst.official ? cst.pref : "登録外", cst.name, visits[cst.id]) !== "yes") return;
+    out.push({ idx: cst.id, pref: cst.official ? cst.pref : "登録外", name: cst.name, location: cst.location, round: null, isCustom: true });
   });
   return out;
 }
@@ -444,7 +508,7 @@ function computeCompletedPrefCount(counts) {
 }
 
 function buildBackupPayload() {
-  return { version: 2, exportedAt: new Date().toISOString(), visits: visits, customs: customs, customCollectibles: customCollectibles };
+  return { version: 2, exportedAt: new Date().toISOString(), visits: visits, customs: customs, customCollectibles: customCollectibles, hiddenCollectibles: hiddenCollectibleKeys };
 }
 
 function exportBackup() {
@@ -513,9 +577,12 @@ function restoreFromText(text) {
   visits = data.visits;
   customs = data.customs;
   customCollectibles = Array.isArray(data.customCollectibles) ? data.customCollectibles : [];
+  hiddenCollectibleKeys = Array.isArray(data.hiddenCollectibles) ? data.hiddenCollectibles : [];
+  migrateCustomsIntoVisits();
   persistVisits();
   persistCustoms();
   persistCustomCollectibles();
+  persistHiddenCollectibles();
   state.backupMessage = "復元しました（" + Object.keys(visits).length + "件の記録 / " + customs.length + "件の追加駅 / " + customCollectibles.length + "件のカスタム収集物）。";
   state.backupOpen = false;
   rerender();
@@ -536,7 +603,7 @@ function renderBar(pct, complete) {
     '</div>';
 }
 
-function renderStationRow(idx, pref, name, location, round, visit) {
+function renderStationRow(idx, pref, name, location, round, visit, isCustom) {
   const visited = !!(visit && visit.v);
   const collect = (visit && visit.collect) || {};
   const onsenExplicit = visit && visit.onsen;
@@ -544,7 +611,7 @@ function renderStationRow(idx, pref, name, location, round, visit) {
   const onsenEff = effectiveOnsen(pref, name, visit);
   const isOpen = String(state.openStationId) === String(idx);
 
-  const collectIconsHtml = getAllCollectibles().map(function (c) {
+  const collectIconsHtml = getVisibleCollectibles().map(function (c) {
     const status = collect[c.key] || "none";
     if (status === "none") return "";
     const color = status === "got" ? COLORS.green : status === "na" ? COLORS.muted : COLORS.blue;
@@ -603,7 +670,7 @@ function renderStationRow(idx, pref, name, location, round, visit) {
       return '<button data-action="set-onsen" data-idx="' + idx + '" data-value="' + v + '" class="text-[11px] px-2 py-1 rounded-full" style="background:' + bg + ';color:' + fg + ';border:1px solid ' + bd + '">' + ONSEN_META[v].label + '</button>';
     }).join("");
 
-    const collectSectionsHtml = getAllCollectibles().map(function (c) {
+    const collectSectionsHtml = getVisibleCollectibles().map(function (c) {
       const status = collect[c.key] || "none";
       const buttons = COLLECT_ORDER.map(function (s) {
         const selected = status === s;
@@ -620,9 +687,22 @@ function renderStationRow(idx, pref, name, location, round, visit) {
       );
     }).join("");
 
+    const searchUrl = "https://www.google.com/search?q=" + encodeURIComponent(name + " 道の駅 " + location);
+    const mapUrl = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(name + " 道の駅 " + location);
+    const searchLinkHtml =
+      '<div class="flex gap-2 mb-3">' +
+      '<a href="' + searchUrl + '" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full" style="background:' + COLORS.hairline + ';color:' + COLORS.textDim + '">' +
+      iconSearch({ size: 11, color: COLORS.textDim }) + ' ブラウザ' +
+      '</a>' +
+      '<a href="' + mapUrl + '" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full" style="background:' + COLORS.hairline + ';color:' + COLORS.textDim + '">' +
+      iconMapPin({ size: 11, color: COLORS.textDim }) + ' マップ' +
+      '</a>' +
+      '</div>';
+
     detailHtml =
       '<div class="px-1 pb-3 pl-10 -mt-1">' +
-      dateSectionHtml +
+      searchLinkHtml +
+      '<div>' + dateSectionHtml + '</div>' +
       '<div class="mb-2.5">' +
       '<div class="flex items-center gap-1 text-[11px] mb-1.5" style="color:' + COLORS.mutedDeep + '"><span style="color:' + COLORS.onsen + '">♨</span> 温泉 ' + onsenHintHtml + '</div>' +
       '<div class="flex gap-1.5">' + onsenButtons + '</div>' +
@@ -630,6 +710,7 @@ function renderStationRow(idx, pref, name, location, round, visit) {
       collectSectionsHtml +
       '<textarea id="note-' + idx + '" data-note-idx="' + idx + '" placeholder="メモ（食べたもの、温泉、感想など）" rows="2" class="w-full text-sm rounded-lg px-2.5 py-2 resize-none" style="background:#0D1117;border:1px solid ' + COLORS.hairline2 + ';color:' + COLORS.text + '">' + escapeHtml(noteVal) + '</textarea>' +
       (round ? '<div class="text-[11px] mt-1.5" style="color:' + COLORS.mutedDeep + '">第' + round + '回認定の道の駅</div>' : '') +
+      (isCustom ? '<button data-action="delete-custom-station" data-idx="' + idx + '" class="text-[11px] mt-2 flex items-center gap-1" style="color:' + COLORS.mutedDeep + '">' + iconTrash2({ size: 11 }) + ' この駅を削除</button>' : '') +
       '</div>';
   }
 
@@ -666,7 +747,7 @@ function renderPrefAccordion(pref, stations, counts) {
   let rowsHtml = "";
   if (expanded) {
     rowsHtml = stations.map(function (s) {
-      return renderStationRow(s.idx, pref, s.name, s.location, s.round, visits[String(s.idx)]);
+      return renderStationRow(s.idx, pref, s.name, s.location, s.round, visits[String(s.idx)], !!s.isCustom);
     }).join("");
     rowsHtml = '<div class="px-3 pb-1" style="border-top:1px solid ' + COLORS.hairline + '">' + rowsHtml + '</div>';
   }
@@ -689,32 +770,31 @@ function renderPrefAccordion(pref, stations, counts) {
   );
 }
 
-function renderCustomCard(item) {
-  return (
-    '<div class="rounded-xl px-3 py-3 mb-2" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.hairline2 + '">' +
-    '<div class="flex items-start justify-between gap-2">' +
-    '<div class="min-w-0">' +
-    '<div class="flex items-center gap-1.5">' +
-    '<span class="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0" style="background:#4F86A633;color:' + COLORS.blue + '">追加</span>' +
-    '<span class="text-[15px] truncate" style="color:' + COLORS.text + '">' + escapeHtml(item.name) + '</span>' +
-    '</div>' +
-    '<div class="text-xs mt-1" style="color:' + COLORS.faint + '">' + escapeHtml(item.location) + (item.date ? '・' + escapeHtml(item.date) : '') + '</div>' +
-    (item.note ? '<div class="text-xs mt-1.5" style="color:#9AA2AD">' + escapeHtml(item.note) + '</div>' : '') +
-    '</div>' +
-    '<button data-action="delete-custom" data-id="' + escapeHtml(item.id) + '" class="flex-shrink-0 p-1 rounded-lg" style="color:' + COLORS.muted + '">' + iconTrash2({ size: 14 }) + '</button>' +
-    '</div>' +
-    '</div>'
-  );
-}
-
 function renderCustomForm() {
   const inputStyle = "background:#0D1117;border:1px solid " + COLORS.hairline2 + ";color:" + COLORS.text;
+  const official = !!state.newCustomOfficial;
+
+  const toggleHtml =
+    '<button data-action="toggle-custom-official" class="flex items-center gap-2 text-[11px] mb-2.5" style="color:' + (official ? COLORS.amber : COLORS.mutedDeep) + '">' +
+    '<span style="width:14px;height:14px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;background:' + (official ? COLORS.amber : "transparent") + ';border:1.5px solid ' + (official ? COLORS.amber : COLORS.hairline2) + ';flex-shrink:0">' +
+    (official ? iconCheck({ size: 10, color: COLORS.bg, strokeWidth: 3 }) : '') +
+    '</span>' +
+    '公式の道の駅として数える（統計・都道府県一覧に反映）' +
+    '</button>';
+
+  const locationFieldHtml = official
+    ? '<select id="custom-pref" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2" style="' + inputStyle + '">' +
+      '<option value="">都道府県を選択</option>' +
+      ALL_PREFS.map(function (p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join("") +
+      '</select>'
+    : '<input id="custom-location" placeholder="場所（市町村など）" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2" style="' + inputStyle + '">';
+
   return (
     '<div class="rounded-xl p-3 mb-2" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.blue + '">' +
+    '<div class="text-[11px] mb-2" style="color:' + COLORS.mutedDeep + '">名前と場所だけでOK。到達チェック・日付・収集物・温泉・メモは追加後にこの駅を開いて記録できます。</div>' +
     '<input id="custom-name" placeholder="駅名" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2" style="' + inputStyle + '">' +
-    '<input id="custom-location" placeholder="場所（市町村など）" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2" style="' + inputStyle + '">' +
-    '<input id="custom-date" type="date" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2" style="' + inputStyle + '">' +
-    '<textarea id="custom-note" placeholder="メモ" rows="2" class="w-full text-sm rounded-lg px-2.5 py-2 mb-2 resize-none" style="' + inputStyle + '"></textarea>' +
+    locationFieldHtml +
+    toggleHtml +
     '<div class="flex gap-2">' +
     '<button data-action="add-custom" class="flex-1 text-sm font-medium rounded-lg py-2" style="background:' + COLORS.amber + ';color:' + COLORS.bg + '">追加する</button>' +
     '<button data-action="cancel-custom-form" class="text-sm rounded-lg py-2 px-4" style="background:' + COLORS.hairline + ';color:' + COLORS.text + '">やめる</button>' +
@@ -758,12 +838,20 @@ function renderBackupSection() {
 }
 
 function renderCollectibleManagement() {
-  const customList = customCollectibles.filter(function (c) { return c.category === APP_CATEGORY; });
-  const listHtml = customList.map(function (c) {
+  const builtinKeys = COLLECTIBLES.map(function (c) { return c.key; });
+  const all = getAllCollectibles();
+  const listHtml = all.map(function (c) {
+    const isCustom = builtinKeys.indexOf(c.key) === -1;
+    const hidden = hiddenCollectibleKeys.indexOf(c.key) !== -1;
+    const labelColor = hidden ? COLORS.mutedDeep : COLORS.textDim;
+    const iconColor = hidden ? COLORS.mutedDeep : undefined;
     return (
       '<div class="flex items-center justify-between text-xs mb-1.5">' +
-      '<span class="flex items-center gap-1.5" style="color:' + COLORS.textDim + '">' + collectibleIconFn(c)({ size: 12, color: COLORS.mutedDeep }) + ' ' + escapeHtml(c.label) + '</span>' +
-      '<button data-action="delete-collectible" data-key="' + escapeHtml(c.key) + '" style="color:' + COLORS.muted + '">' + iconTrash2({ size: 12 }) + '</button>' +
+      '<span class="flex items-center gap-1.5" style="color:' + labelColor + '">' + c.icon({ size: 12, color: iconColor }) + ' ' + escapeHtml(c.label) + (hidden ? ' <span style="font-size:10px">(非表示)</span>' : '') + '</span>' +
+      '<span class="flex items-center gap-3">' +
+      '<button data-action="toggle-collectible-visible" data-key="' + escapeHtml(c.key) + '" class="text-[11px]" style="color:' + (hidden ? COLORS.blue : COLORS.green) + '">' + (hidden ? "表示する" : "隠す") + '</button>' +
+      (isCustom ? '<button data-action="delete-collectible" data-key="' + escapeHtml(c.key) + '" style="color:' + COLORS.muted + '">' + iconTrash2({ size: 12 }) + '</button>' : '') +
+      '</span>' +
       '</div>'
     );
   }).join("");
@@ -824,13 +912,13 @@ function renderStatsView() {
     '<div class="rounded-2xl p-4 mb-4" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.hairline + '">' +
     '<div class="grid grid-cols-3 gap-3 text-center">' +
     '<div><div class="text-xl font-display" style="color:' + COLORS.amber + '">' + totalVisited + '</div><div class="text-[11px] mt-1" style="color:' + COLORS.faint + '">到達済み</div></div>' +
-    '<div><div class="text-xl font-display" style="color:' + COLORS.text + '">' + (STATIONS.length - totalVisited) + '</div><div class="text-[11px] mt-1" style="color:' + COLORS.faint + '">未到達</div></div>' +
+    '<div><div class="text-xl font-display" style="color:' + COLORS.text + '">' + (getOfficialTotalCount() - totalVisited) + '</div><div class="text-[11px] mt-1" style="color:' + COLORS.faint + '">未到達</div></div>' +
     '<div><div class="text-xl font-display" style="color:' + COLORS.green + '">' + completedPrefCount + '</div><div class="text-[11px] mt-1" style="color:' + COLORS.faint + '">制覇県</div></div>' +
     '</div>' +
     (customs.length > 0 ? '<div class="text-[11px] text-center mt-3" style="color:' + COLORS.blue + '">＋登録外 ' + customs.length + '件</div>' : '') +
     '</div>';
 
-  const collectRowsHtml = getAllCollectibles().map(function (c) {
+  const collectRowsHtml = getVisibleCollectibles().map(function (c) {
     const t = collectTotals[c.key];
     return (
       '<div class="mb-2.5 last:mb-0">' +
@@ -892,11 +980,12 @@ function renderStatsView() {
 function renderApp() {
   const counts = computeCounts();
   const totalVisited = computeTotalVisited();
+  const totalOfficial = getOfficialTotalCount();
   const collectTotals = computeCollectTotals();
   const onsenMatchCount = computeOnsenMatchCount();
   const searchResults = computeSearchResults();
 
-  const collectLineHtml = getAllCollectibles().map(function (c) {
+  const collectLineHtml = getVisibleCollectibles().map(function (c) {
     return '<span class="flex items-center gap-1">' + c.icon({ size: 11 }) + '<span>' + collectTotals[c.key].got + '</span></span>';
   }).join("");
 
@@ -904,7 +993,7 @@ function renderApp() {
     '<div class="mb-5">' +
     '<div class="flex items-center justify-between mb-1">' +
     '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">道の駅手帖</h1>' +
-    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">全国' + STATIONS.length + '駅</span>' +
+    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">全国' + totalOfficial + '駅</span>' +
     '</div>' +
     '<div class="rounded-2xl p-4 mt-3" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
     '<div class="flex items-center justify-between">' +
@@ -913,11 +1002,11 @@ function renderApp() {
     renderOdometer(totalVisited) +
     '</div>' +
     '<div class="text-right">' +
-    '<div class="text-2xl font-display" style="color:' + COLORS.amber + '">' + Math.round((totalVisited / STATIONS.length) * 100) + '<span class="text-sm">%</span></div>' +
-    '<div class="text-[11px] mt-0.5" style="color:' + COLORS.faint + '">残り' + (STATIONS.length - totalVisited) + '駅</div>' +
+    '<div class="text-2xl font-display" style="color:' + COLORS.amber + '">' + Math.round((totalVisited / totalOfficial) * 100) + '<span class="text-sm">%</span></div>' +
+    '<div class="text-[11px] mt-0.5" style="color:' + COLORS.faint + '">残り' + (totalOfficial - totalVisited) + '駅</div>' +
     '</div>' +
     '</div>' +
-    '<div class="mt-3">' + renderBar((totalVisited / STATIONS.length) * 100, totalVisited === STATIONS.length) + '</div>' +
+    '<div class="mt-3">' + renderBar((totalVisited / totalOfficial) * 100, totalVisited === totalOfficial) + '</div>' +
     '<div class="flex items-center gap-3 text-[11px] mt-2" style="color:' + COLORS.mutedDeep + '">' +
     collectLineHtml +
     (customs.length > 0 ? '<span style="color:' + COLORS.blue + '">＋追加 ' + customs.length + '件</span>' : '') +
@@ -954,7 +1043,7 @@ function renderApp() {
           return (
             '<div>' +
             '<div class="text-[11px] pt-2" style="color:' + COLORS.blue + '">' + escapeHtml(s.pref) + '</div>' +
-            renderStationRow(s.idx, s.pref, s.name, s.location, s.round, visits[String(s.idx)]) +
+            renderStationRow(s.idx, s.pref, s.name, s.location, s.round, visits[String(s.idx)], s.isCustom) +
             '</div>'
           );
         }).join("");
@@ -975,7 +1064,13 @@ function renderApp() {
         const rPct = rc.total ? (rc.visited / rc.total) * 100 : 0;
         const rComplete = rc.total > 0 && rc.visited === rc.total;
         const prefsHtml = region.prefs.map(function (pref) {
-          return renderPrefAccordion(pref.name, pref.stations, counts);
+          const extras = getOfficialCustoms()
+            .filter(function (c) { return c.pref === pref.name; })
+            .map(function (c) { return { idx: c.id, name: c.name, location: c.location, round: null, isCustom: true }; });
+          const combinedStations = pref.stations.map(function (s) {
+            return { idx: s.idx, name: s.name, location: s.location, round: s.round, isCustom: false };
+          }).concat(extras);
+          return renderPrefAccordion(pref.name, combinedStations, counts);
         }).join("");
         return (
           '<div id="region-' + escapeHtml(region.name) + '" class="mb-5">' +
@@ -988,10 +1083,15 @@ function renderApp() {
         );
       }).join("");
 
+      const nonOfficialCustoms = customs.filter(function (c) { return !c.official; });
       const customsHtml =
         '<div class="mt-6">' +
         '<h2 class="text-sm font-bold mb-2 px-1" style="color:' + COLORS.faint + '">登録外の道の駅</h2>' +
-        customs.map(function (c) { return renderCustomCard(c); }).join("") +
+        (nonOfficialCustoms.length > 0
+          ? '<div class="rounded-xl overflow-hidden px-2 mb-2" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.hairline + '">' +
+            nonOfficialCustoms.map(function (c) { return renderStationRow(c.id, "登録外", c.name, c.location, null, visits[c.id], true); }).join("") +
+            '</div>'
+          : '') +
         (state.showCustomForm
           ? renderCustomForm()
           : '<button data-action="show-custom-form" class="w-full flex items-center justify-center gap-1.5 text-sm rounded-xl py-3" style="background:' + COLORS.surface + ';border:1px dashed ' + COLORS.hairline2 + ';color:' + COLORS.muted + '">' + iconPlus({ size: 15 }) + ' 駅を追加する</button>') +
@@ -1074,9 +1174,14 @@ root.addEventListener("click", function (e) {
     rerender();
   } else if (action === "show-custom-form") {
     state.showCustomForm = true;
+    state.newCustomOfficial = false;
     rerender();
   } else if (action === "cancel-custom-form") {
     state.showCustomForm = false;
+    state.newCustomOfficial = false;
+    rerender();
+  } else if (action === "toggle-custom-official") {
+    state.newCustomOfficial = !state.newCustomOfficial;
     rerender();
   } else if (action === "add-custom") {
     const nameEl = document.getElementById("custom-name");
@@ -1085,17 +1190,44 @@ root.addEventListener("click", function (e) {
       nameEl.focus();
       return;
     }
-    const location = document.getElementById("custom-location").value.trim();
-    const date = document.getElementById("custom-date").value;
-    const note = document.getElementById("custom-note").value.trim();
-    customs.push({ id: "c" + Date.now(), name: name, location: location, note: note, date: date });
+    const official = !!state.newCustomOfficial;
+    let location, pref;
+    if (official) {
+      const prefEl = document.getElementById("custom-pref");
+      pref = prefEl ? prefEl.value : "";
+      if (!pref) {
+        if (prefEl) prefEl.focus();
+        return;
+      }
+      location = pref;
+    } else {
+      location = document.getElementById("custom-location").value.trim();
+    }
+    const id = "c" + Date.now();
+    const entry = { id: id, name: name, location: location };
+    if (official) {
+      entry.official = true;
+      entry.pref = pref;
+    }
+    customs.push(entry);
+    visits[id] = { v: true, collect: {}, dates: [], note: "" };
+    COLLECTIBLES.forEach(function (col) {
+      visits[id].collect[col.key] = "none";
+    });
     persistCustoms();
+    persistVisits();
     state.showCustomForm = false;
+    state.newCustomOfficial = false;
     rerender();
-  } else if (action === "delete-custom") {
-    const id = btn.dataset.id;
-    customs = customs.filter(function (c) { return c.id !== id; });
+  } else if (action === "delete-custom-station") {
+    if (typeof confirm === "function" && !confirm("この駅を削除しますか？記録（チェック・収集物・メモなど）も一緒に消えます。")) {
+      return;
+    }
+    customs = customs.filter(function (c) { return c.id !== idx; });
+    delete visits[idx];
     persistCustoms();
+    persistVisits();
+    if (String(state.openStationId) === String(idx)) state.openStationId = null;
     rerender();
   } else if (action === "add-date") {
     const input = document.getElementById("newdate-" + idx);
@@ -1168,6 +1300,13 @@ root.addEventListener("click", function (e) {
     });
     persistCustomCollectibles();
     state.collectibleFormOpen = false;
+    rerender();
+  } else if (action === "toggle-collectible-visible") {
+    const key = btn.dataset.key;
+    const i = hiddenCollectibleKeys.indexOf(key);
+    if (i === -1) hiddenCollectibleKeys.push(key);
+    else hiddenCollectibleKeys.splice(i, 1);
+    persistHiddenCollectibles();
     rerender();
   } else if (action === "delete-collectible") {
     const key = btn.dataset.key;
