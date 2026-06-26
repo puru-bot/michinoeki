@@ -1473,72 +1473,41 @@ function renderShrineStatsContent() {
 }
 
 
-function renderNicknameSection() {
+function renderNicknameAndCategoriesCard() {
+  const rows = CATEGORIES.map(function (cat, i) {
+    const on = state.categoryOn[cat.key];
+    const borderStyle = i < CATEGORIES.length - 1 ? "border-bottom:1px solid " + COLORS.hairline + ";" : "";
+    return (
+      '<button data-action="toggle-category-on" data-value="' + cat.key + '" class="w-full flex items-center justify-between py-2.5" style="' + borderStyle + '">' +
+      '<span class="text-sm" style="color:' + (on ? COLORS.text : COLORS.muted) + '">' + cat.label + '</span>' +
+      '<span style="width:18px;height:18px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;background:' + (on ? COLORS.blue : "transparent") + ';border:1.5px solid ' + (on ? COLORS.blue : COLORS.hairline2) + ';flex-shrink:0">' +
+      (on ? iconCheck({ size: 11, color: COLORS.bg, strokeWidth: 3 }) : '') +
+      '</span>' +
+      '</button>'
+    );
+  }).join("");
+
   return (
     '<div class="rounded-2xl p-4 mb-5" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.hairline + '">' +
     '<div class="text-[11px] mb-1.5" style="color:' + COLORS.mutedDeep + '">ニックネーム</div>' +
-    '<input id="nickname-input" value="' + escapeHtml(nickname) + '" placeholder="名前を入力" class="w-full text-base font-display rounded-lg px-3 py-2" style="background:#0D1117;border:1px solid ' + COLORS.hairline2 + ';color:' + COLORS.text + '">' +
+    '<input id="nickname-input" value="' + escapeHtml(nickname) + '" placeholder="名前を入力" class="w-full text-base font-display rounded-lg px-3 py-2 mb-4" style="background:#0D1117;border:1px solid ' + COLORS.hairline2 + ';color:' + COLORS.text + '">' +
+    '<div class="text-[11px] mb-1" style="color:' + COLORS.mutedDeep + '">訪れる場所</div>' +
+    rows +
     '</div>'
   );
 }
 
-function renderCategoryToggleButtons() {
-  return (
-    '<div class="flex gap-2 mb-5 flex-wrap">' +
-    CATEGORIES.map(function (cat) {
-      const on = state.categoryOn[cat.key];
-      return '<button data-action="toggle-category-on" data-value="' + cat.key + '" class="flex items-center justify-center gap-1.5 text-sm font-medium rounded-full py-2 px-4" style="background:' + (on ? COLORS.blue + "26" : COLORS.surface) + ';color:' + (on ? COLORS.blue : COLORS.muted) + ';border:1px solid ' + (on ? COLORS.blue : COLORS.hairline) + '">' +
-        (on ? iconCheck({ size: 13, color: COLORS.blue, strokeWidth: 3 }) : '') +
-        cat.label +
-        '</button>';
-    }).join("") +
-    '</div>'
-  );
-}
-
-function renderCollectibleCard(category, label) {
-  const collectTotals = category === "castle" ? computeCastleCollectTotals() : category === "shrine" ? computeShrineCollectTotals() : computeCollectTotals();
-  return (
-    '<div class="rounded-2xl p-4 mb-5" style="background:' + COLORS.surface + ';border:1px solid ' + COLORS.hairline + '">' +
-    '<div class="text-xs font-bold mb-3" style="color:' + COLORS.faint + '">' + label + 'の収集物</div>' +
-    renderCollectRows(category, collectTotals) +
-    renderCollectibleManagement(category) +
-    '</div>'
-  );
-}
-
-function renderProfileBody(cats) {
-  const nicknameHtml = renderNicknameSection();
-  const toggleButtonsHtml = renderCategoryToggleButtons();
-
-  const categoryCardsHtml = cats.length > 0
-    ? cats.map(function (c) {
-        const header = c === "castle" ? renderCastleHeader() : c === "shrine" ? renderShrineHeader() : renderMichinoekiHeader();
-        const label = c === "castle" ? "城" : c === "shrine" ? "神社" : "道の駅";
-        return header + renderCollectibleCard(c, label);
-      }).join("")
-    : '<div class="text-sm text-center py-10" style="color:' + COLORS.mutedDeep + '">上のボタンでカテゴリを選んでください</div>';
-
-  return nicknameHtml + toggleButtonsHtml + categoryCardsHtml;
-}
-
-function renderMichinoekiHeader() {
+function renderMichinoekiIsland() {
   const totalVisited = computeTotalVisited();
   const totalOfficial = getOfficialTotalCount();
-  const collectTotals = computeCollectTotals();
   const completedPrefCount = computeCompletedPrefCount(computeCounts());
+  const collectTotals = computeCollectTotals();
   const collectLineHtml = getVisibleCollectiblesFor("michinoeki").map(function (c) {
     return '<span class="flex items-center gap-1">' + c.icon({ size: 11 }) + '<span>' + collectTotals[c.key].got + '</span></span>';
   }).join("");
   const otherCount = customs.filter(function (c) { return c.category === "michinoeki" && !c.official; }).length;
 
-  return (
-    '<div class="mb-5">' +
-    '<div class="flex items-center justify-between mb-1">' +
-    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">道の駅手帖</h1>' +
-    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">全国' + totalOfficial + '駅</span>' +
-    '</div>' +
-    '<div class="rounded-2xl p-4 mt-3" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+  const statHtml =
     '<div class="flex items-center justify-between">' +
     '<div>' +
     '<div class="text-[11px] tracking-widest mb-1" style="color:' + COLORS.faint + '">到達数</div>' +
@@ -1550,35 +1519,42 @@ function renderMichinoekiHeader() {
     '</div>' +
     '</div>' +
     '<div class="mt-3">' + renderBar((totalVisited / totalOfficial) * 100, totalVisited === totalOfficial) + '</div>' +
-    '<div class="flex items-center gap-3 text-[11px] mt-2" style="color:' + COLORS.mutedDeep + '">' +
+    '<div class="flex items-center gap-3 text-[11px] mt-2 flex-wrap" style="color:' + COLORS.mutedDeep + '">' +
     '<span style="color:' + COLORS.green + '">制覇 ' + completedPrefCount + '県</span>' +
     collectLineHtml +
     (otherCount > 0 ? '<span style="color:' + COLORS.blue + '">＋追加 ' + otherCount + '件</span>' : '') +
+    '</div>';
+
+  return (
+    '<div class="mb-5">' +
+    '<div class="flex items-center justify-between mb-1 px-1">' +
+    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">道の駅手帖</h1>' +
+    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">全国' + totalOfficial + '駅</span>' +
     '</div>' +
+    '<div class="rounded-2xl p-4" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+    statHtml +
+    '<div class="mt-4 pt-3" style="border-top:1px solid ' + COLORS.hairline + '">' +
+    renderCollectRows("michinoeki", collectTotals) +
+    '</div>' +
+    renderCollectibleManagement("michinoeki") +
     '</div>' +
     '</div>'
   );
 }
 
-function renderCastleHeader() {
+function renderCastleIsland() {
   const meijo = computeMeijoProgress();
   const zoku = computeZokuMeijoProgress();
   const other = computeOtherCastleCount();
   const totalGot = meijo.got + zoku.got;
   const totalOfficial = meijo.total + zoku.total;
-  const collectTotals = computeCastleCollectTotals();
   const completedPrefCount = computeCompletedPrefCount(computeCastleCounts());
+  const collectTotals = computeCastleCollectTotals();
   const collectLineHtml = getVisibleCollectiblesFor("castle").map(function (c) {
     return '<span class="flex items-center gap-1">' + c.icon({ size: 11 }) + '<span>' + collectTotals[c.key].got + '</span></span>';
   }).join("");
 
-  return (
-    '<div class="mb-5">' +
-    '<div class="flex items-center justify-between mb-1">' +
-    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">城手帖</h1>' +
-    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">100名城+続100名城</span>' +
-    '</div>' +
-    '<div class="rounded-2xl p-4 mt-3" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+  const statHtml =
     '<div class="flex items-center justify-between">' +
     '<div>' +
     '<div class="text-[11px] tracking-widest mb-1" style="color:' + COLORS.faint + '">到達数</div>' +
@@ -1590,32 +1566,39 @@ function renderCastleHeader() {
     '</div>' +
     '</div>' +
     '<div class="mt-3">' + renderBar((totalGot / totalOfficial) * 100, totalGot === totalOfficial) + '</div>' +
-    '<div class="flex items-center gap-3 text-[11px] mt-2" style="color:' + COLORS.mutedDeep + '">' +
+    '<div class="flex items-center gap-3 text-[11px] mt-2 flex-wrap" style="color:' + COLORS.mutedDeep + '">' +
     '<span style="color:' + COLORS.green + '">制覇 ' + completedPrefCount + '県</span>' +
     collectLineHtml +
     '<span style="color:' + COLORS.blue + '">その他の城 ' + other.got + '/' + other.total + '件</span>' +
+    '</div>';
+
+  return (
+    '<div class="mb-5">' +
+    '<div class="flex items-center justify-between mb-1 px-1">' +
+    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">城手帖</h1>' +
+    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">100名城+続100名城</span>' +
     '</div>' +
+    '<div class="rounded-2xl p-4" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+    statHtml +
+    '<div class="mt-4 pt-3" style="border-top:1px solid ' + COLORS.hairline + '">' +
+    renderCollectRows("castle", collectTotals) +
+    '</div>' +
+    renderCollectibleManagement("castle") +
     '</div>' +
     '</div>'
   );
 }
 
-function renderShrineHeader() {
+function renderShrineIsland() {
   const ichinomiya = computeIchinomiyaProgress();
   const other = computeOtherShrineCount();
-  const collectTotals = computeShrineCollectTotals();
   const completedPrefCount = computeCompletedPrefCount(computeShrineCounts());
+  const collectTotals = computeShrineCollectTotals();
   const collectLineHtml = getVisibleCollectiblesFor("shrine").map(function (c) {
     return '<span class="flex items-center gap-1">' + c.icon({ size: 11 }) + '<span>' + collectTotals[c.key].got + '</span></span>';
   }).join("");
 
-  return (
-    '<div class="mb-5">' +
-    '<div class="flex items-center justify-between mb-1">' +
-    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">神社手帖</h1>' +
-    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">一の宮' + ichinomiya.total + '社</span>' +
-    '</div>' +
-    '<div class="rounded-2xl p-4 mt-3" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+  const statHtml =
     '<div class="flex items-center justify-between">' +
     '<div>' +
     '<div class="text-[11px] tracking-widest mb-1" style="color:' + COLORS.faint + '">到達数</div>' +
@@ -1627,14 +1610,39 @@ function renderShrineHeader() {
     '</div>' +
     '</div>' +
     '<div class="mt-3">' + renderBar((ichinomiya.got / ichinomiya.total) * 100, ichinomiya.got === ichinomiya.total) + '</div>' +
-    '<div class="flex items-center gap-3 text-[11px] mt-2" style="color:' + COLORS.mutedDeep + '">' +
+    '<div class="flex items-center gap-3 text-[11px] mt-2 flex-wrap" style="color:' + COLORS.mutedDeep + '">' +
     '<span style="color:' + COLORS.green + '">制覇 ' + completedPrefCount + '県</span>' +
     collectLineHtml +
     '<span style="color:' + COLORS.blue + '">その他の神社 ' + other.got + '/' + other.total + '件</span>' +
+    '</div>';
+
+  return (
+    '<div class="mb-5">' +
+    '<div class="flex items-center justify-between mb-1 px-1">' +
+    '<h1 class="font-display text-xl" style="color:' + COLORS.text + '">神社手帖</h1>' +
+    '<span class="text-[10px] tracking-wide flex-shrink-0" style="color:' + COLORS.mutedDeep + '">一の宮' + ichinomiya.total + '社</span>' +
     '</div>' +
+    '<div class="rounded-2xl p-4" style="background:linear-gradient(180deg, ' + COLORS.surface + ' 0%, ' + COLORS.surfaceAlt + ' 100%);border:1px solid ' + COLORS.hairline + '">' +
+    statHtml +
+    '<div class="mt-4 pt-3" style="border-top:1px solid ' + COLORS.hairline + '">' +
+    renderCollectRows("shrine", collectTotals) +
+    '</div>' +
+    renderCollectibleManagement("shrine") +
     '</div>' +
     '</div>'
   );
+}
+
+function renderProfileBody(cats) {
+  const topCard = renderNicknameAndCategoriesCard();
+
+  const categoryIslandsHtml = cats.length > 0
+    ? cats.map(function (c) {
+        return c === "castle" ? renderCastleIsland() : c === "shrine" ? renderShrineIsland() : renderMichinoekiIsland();
+      }).join("")
+    : '<div class="text-sm text-center py-10" style="color:' + COLORS.mutedDeep + '">上のチェックで訪れる場所を選んでください</div>';
+
+  return topCard + categoryIslandsHtml;
 }
 
 function renderCastleAddForm() {
